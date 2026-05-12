@@ -12,9 +12,11 @@ WORKDIR /var/lib/ret2shell
 ARG R2S_GIT_VERSION=DEADBEEF
 ENV R2S_GIT_VERSION=${R2S_GIT_VERSION}
 
+ARG R2S_BUILD_TARGET=x86_64-unknown-linux-musl
+
 RUN --mount=type=cache,target=/var/lib/ret2shell/target cargo update && \
-    cargo build --release --bin r2s-server --target x86_64-unknown-linux-musl && \
-    cp /var/lib/ret2shell/target/x86_64-unknown-linux-musl/release/r2s-server /usr/local/bin/r2s-server
+    cargo build --release --bin r2s-server --target "$R2S_BUILD_TARGET" && \
+    cp "/var/lib/ret2shell/target/$R2S_BUILD_TARGET/release/r2s-server" /usr/local/bin/r2s-server
 
 FROM node:lts-alpine AS frontend
 
