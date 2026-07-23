@@ -106,7 +106,7 @@ async fn update_self_team(
   Extension(team): Extension<Option<team::Model>>, Json(req): Json<UpdateTeamRequest>,
 ) -> Result<impl IntoResponse, ResponseError> {
   let mut team = team.ok_or_else(|| ResponseError::NotFound("team not found".to_owned()))?;
-  if game.team_size > 1 {
+  if game.team_size != 1 {
     team.name = req.name;
   } else {
     team.name = token.nickname.clone();
