@@ -1,12 +1,12 @@
 name: Script Image
 
 on:
-  push:
-    paths:
-      - ".github/workflows/scripts.release-image.yml"
-      - "Containerfile"
-      - "release-image.fish"
-      - "release-image.sh"
+  # push:
+  #   paths:
+  #     - ".github/workflows/scripts.release-image.yml"
+  #     - "Containerfile"
+  #     - "release-image.fish"
+  #     - "release-image.sh"
 
   workflow_dispatch:
 
