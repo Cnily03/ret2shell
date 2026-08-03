@@ -469,7 +469,7 @@ jobs:
           image_tag="$release_version"
           image_ref="$image_repository:$image_tag"
           stable_image_ref="$image_repository:latest"
-          printf -v container_image_section '## Container Image\n\n| Image | Stable alias |\n| --- | --- |\n| `%s` | `%s` |\n\n```bash\ndocker pull %s\n```\n\n' "$image_ref" "$stable_image_ref" "$image_ref"
+          printf -v container_image_section '## Container Image\n\n- Image: `%s`\n- Stable Alias: `%s`\n\n```bash\ndocker pull %s\n```\n\n' "$image_ref" "$stable_image_ref" "$image_ref"
 
           web_dist_section=""
           if [ "${#web_dist_assets[@]}" -eq 1 ]; then
