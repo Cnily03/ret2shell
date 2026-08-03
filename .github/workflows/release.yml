@@ -201,7 +201,7 @@ jobs:
           fi
 
           mv "${chart_packages[0]}" "$asset_dir/$asset_name"
-          sha256sum "$asset_dir/$asset_name" > "$asset_dir/$asset_name.sha256"
+          sha256sum "$asset_dir/$asset_name" | cut -d ' ' -f 1 | tr -cd '0-9a-f' > "$asset_dir/$asset_name.sha256"
 
       - name: Upload chart assets
         uses: actions/upload-artifact@v7
@@ -258,7 +258,7 @@ jobs:
           mkdir -p "$asset_dir"
           asset_name="web-dist-${{ needs.prepare.outputs.release_version }}.tgz"
           tar -czf "$asset_dir/$asset_name" -C web/dist .
-          sha256sum "$asset_dir/$asset_name" > "$asset_dir/$asset_name.sha256"
+          sha256sum "$asset_dir/$asset_name" | cut -d ' ' -f 1 | tr -cd '0-9a-f' > "$asset_dir/$asset_name.sha256"
 
       - name: Upload web assets
         uses: actions/upload-artifact@v7
@@ -318,24 +318,20 @@ jobs:
             sudo apt install -y musl-tools musl-dev clang lld
           fi
 
-      - name: Install macOS LLVM toolchain
+      - name: Install macOS LLVM linker toolchain
         if: ${{ runner.os == 'macOS' }}
         run: |
-          if ! brew list llvm >/dev/null 2>&1; then
+          if ! brew list llvm >/dev/null 2>&1 || ! brew list lld >/dev/null 2>&1; then
             brew update
-            brew install llvm
+            brew install llvm lld
           fi
 
-          # Keep Cargo using the repository .cargo/config.toml exactly as-is.
-          # Darwin targets use Cargo's default `cc` linker plus -fuse-ld=lld,
-          # so provide a `cc` name that resolves to Homebrew LLVM clang.
           llvm_prefix="$(brew --prefix llvm)"
-          llvm_cc_dir="${{ runner.temp }}/llvm-cc"
-          mkdir -p "$llvm_cc_dir"
-          ln -sf "$llvm_prefix/bin/clang" "$llvm_cc_dir/cc"
-          ln -sf "$llvm_prefix/bin/clang++" "$llvm_cc_dir/c++"
-          echo "$llvm_cc_dir" >> "$GITHUB_PATH"
+          lld_prefix="$(brew --prefix lld)"
           echo "$llvm_prefix/bin" >> "$GITHUB_PATH"
+          echo "$lld_prefix/bin" >> "$GITHUB_PATH"
+          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=$llvm_prefix/bin/clang" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=$llvm_prefix/bin/clang" >> "$GITHUB_ENV"
 
       - name: Setup release environment
         id: setup-env
@@ -383,9 +379,9 @@ jobs:
           chmod +x "$asset_dir/$asset_name" || true
 
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$asset_dir/$asset_name" > "$asset_dir/$asset_name.sha256"
+            sha256sum "$asset_dir/$asset_name" | cut -d ' ' -f 1 | tr -cd '0-9a-f' > "$asset_dir/$asset_name.sha256"
           else
-            shasum -a 256 "$asset_dir/$asset_name" > "$asset_dir/$asset_name.sha256"
+            shasum -a 256 "$asset_dir/$asset_name" | cut -d ' ' -f 1 | tr -cd '0-9a-f' > "$asset_dir/$asset_name.sha256"
           fi
 
       - name: Upload binary assets
@@ -451,17 +447,36 @@ jobs:
             exit 1
           fi
 
+          read_sha256() {
+            local sha_file="$1"
+            if [ ! -f "$sha_file" ]; then
+              echo "missing checksum: $sha_file" >&2
+              exit 1
+            fi
+            tr -cd '0-9a-f' < "$sha_file"
+          }
+
           helm_chart_section=""
           if [ "${#chart_packages[@]}" -eq 1 ]; then
             chart_filename="$(basename "${chart_packages[0]}")"
+            chart_sha256="$(read_sha256 "${chart_packages[0]}.sha256")"
             chart_download_url="${{ github.server_url }}/${{ github.repository }}/releases/download/${release_version}/${chart_filename}"
-            printf -v helm_chart_section '## Helm Chart\n\n- Asset: `%s`\n- SHA256: `%s.sha256`\n- Download: %s\n\nThis chart package is published directly from the repository, so `version`, `appVersion`, and `platform.image.tag` already match the release tag.\n\n```bash\nhelm install ret2shell %s -n ret2shell-platform --create-namespace\n```\n\n' "$chart_filename" "$chart_filename" "$chart_download_url" "$chart_download_url"
+            printf -v helm_chart_section '## Helm Chart\n\n| Asset | Digest |\n| --- | --- |\n| [`%s`](%s) | `sha256:%s` |\n\nThis chart package is published directly from the repository, so `version`, `appVersion`, and `platform.image.tag` already match the release tag.\n\n```bash\nhelm install ret2shell %s -n ret2shell-platform --create-namespace\n```\n\n' "$chart_filename" "$chart_download_url" "$chart_sha256" "$chart_download_url"
           fi
+
+          image_repository="ghcr.io/${{ github.repository }}"
+          image_repository="${image_repository,,}"
+          image_tag="$release_version"
+          image_ref="$image_repository:$image_tag"
+          stable_image_ref="$image_repository:latest"
+          printf -v container_image_section '## Container Image\n\n| Image | Stable alias |\n| --- | --- |\n| `%s` | `%s` |\n\n```bash\ndocker pull %s\n```\n\n' "$image_ref" "$stable_image_ref" "$image_ref"
 
           web_dist_section=""
           if [ "${#web_dist_assets[@]}" -eq 1 ]; then
             web_dist_filename="$(basename "${web_dist_assets[0]}")"
-            printf -v web_dist_section '## Web Distribution\n\n- Asset: `%s`\n- SHA256: `%s.sha256`\n\n' "$web_dist_filename" "$web_dist_filename"
+            web_dist_sha256="$(read_sha256 "${web_dist_assets[0]}.sha256")"
+            web_dist_download_url="${{ github.server_url }}/${{ github.repository }}/releases/download/${release_version}/${web_dist_filename}"
+            printf -v web_dist_section '## Web Distribution\n\n| Asset | Digest |\n| --- | --- |\n| [`%s`](%s) | `sha256:%s` |\n\n' "$web_dist_filename" "$web_dist_download_url" "$web_dist_sha256"
           fi
 
           binary_rows=""
@@ -470,18 +485,21 @@ jobs:
             if [[ "$filename" == *.sha256 ]]; then
               continue
             fi
-            printf -v row -- '- Asset: `%s`\n  SHA256: `%s.sha256`\n' "$filename" "$filename"
+            binary_sha256="$(read_sha256 "$binary_asset.sha256")"
+            binary_download_url="${{ github.server_url }}/${{ github.repository }}/releases/download/${release_version}/${filename}"
+            printf -v row -- '| [`%s`](%s) | `sha256:%s` |\n' "$filename" "$binary_download_url" "$binary_sha256"
             binary_rows+="$row"
           done
 
           binaries_section=""
           if [ -n "$binary_rows" ]; then
-            printf -v binaries_section '## Binaries\n\n%s' "$binary_rows"
+            printf -v binaries_section '## Binaries\n\n| Asset | Digest |\n| --- | --- |\n%s\n' "$binary_rows"
           fi
 
           export PREVIOUS_VERSION="${{ needs.prepare.outputs.previous_display }}"
           export RELEASE_VERSION="$release_version"
           export HELM_CHART_SECTION="$helm_chart_section"
+          export CONTAINER_IMAGE_SECTION="$container_image_section"
           export WEB_DIST_SECTION="$web_dist_section"
           export BINARIES_SECTION="$binaries_section"
 
@@ -496,6 +514,7 @@ jobs:
           fail_on_unmatched_files: false
           files: |
             ${{ runner.temp }}/release-assets/*
+          # Keep GitHub-generated "What's Changed" and contributor sections after the custom body.
           generate_release_notes: true
           name: ${{ needs.prepare.outputs.release_version }}
           overwrite_files: true
