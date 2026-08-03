@@ -327,8 +327,15 @@ jobs:
           fi
 
           # Keep Cargo using the repository .cargo/config.toml exactly as-is.
-          # This only makes Homebrew LLVM's clang/lld available before Apple clang.
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          # Darwin targets use Cargo's default `cc` linker plus -fuse-ld=lld,
+          # so provide a `cc` name that resolves to Homebrew LLVM clang.
+          llvm_prefix="$(brew --prefix llvm)"
+          llvm_cc_dir="${{ runner.temp }}/llvm-cc"
+          mkdir -p "$llvm_cc_dir"
+          ln -sf "$llvm_prefix/bin/clang" "$llvm_cc_dir/cc"
+          ln -sf "$llvm_prefix/bin/clang++" "$llvm_cc_dir/c++"
+          echo "$llvm_cc_dir" >> "$GITHUB_PATH"
+          echo "$llvm_prefix/bin" >> "$GITHUB_PATH"
 
       - name: Setup release environment
         id: setup-env
@@ -392,6 +399,7 @@ jobs:
   # Collect assets, render .github/release-notes.md with replace-env.js, then publish the GitHub Release.
   release:
     name: Publish Release
+    if: ${{ always() && needs.prepare.result == 'success' }}
     needs:
       - prepare
       - chart
@@ -411,6 +419,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.release_version }}
 
       - name: Download release assets
+        continue-on-error: true
         uses: actions/download-artifact@v6
         with:
           merge-multiple: true
@@ -424,24 +433,37 @@ jobs:
           assets_dir="${{ runner.temp }}/release-assets"
           notes_file="${{ runner.temp }}/release-notes.md"
           release_version="${{ needs.prepare.outputs.release_version }}"
+          mkdir -p "$assets_dir"
 
           shopt -s nullglob
           chart_packages=("$assets_dir"/helm-chart-*.tgz)
+          web_dist_assets=("$assets_dir"/web-dist-*.tgz)
           binary_assets=("$assets_dir"/r2s-server-*)
           shopt -u nullglob
 
-          if [ "${#chart_packages[@]}" -ne 1 ]; then
-            echo "expected one chart package, found ${#chart_packages[@]}" >&2
+          if [ "${#chart_packages[@]}" -gt 1 ]; then
+            echo "expected at most one chart package, found ${#chart_packages[@]}" >&2
             exit 1
           fi
 
-          if [ "${#binary_assets[@]}" -eq 0 ]; then
-            echo "expected at least one binary asset" >&2
+          if [ "${#web_dist_assets[@]}" -gt 1 ]; then
+            echo "expected at most one web dist asset, found ${#web_dist_assets[@]}" >&2
             exit 1
           fi
 
-          chart_package="${chart_packages[0]}"
-          chart_filename="$(basename "$chart_package")"
+          helm_chart_section=""
+          if [ "${#chart_packages[@]}" -eq 1 ]; then
+            chart_filename="$(basename "${chart_packages[0]}")"
+            chart_download_url="${{ github.server_url }}/${{ github.repository }}/releases/download/${release_version}/${chart_filename}"
+            printf -v helm_chart_section '## Helm Chart\n\n- Asset: `%s`\n- SHA256: `%s.sha256`\n- Download: %s\n\nThis chart package is published directly from the repository, so `version`, `appVersion`, and `platform.image.tag` already match the release tag.\n\n```bash\nhelm install ret2shell %s -n ret2shell-platform --create-namespace\n```\n\n' "$chart_filename" "$chart_filename" "$chart_download_url" "$chart_download_url"
+          fi
+
+          web_dist_section=""
+          if [ "${#web_dist_assets[@]}" -eq 1 ]; then
+            web_dist_filename="$(basename "${web_dist_assets[0]}")"
+            printf -v web_dist_section '## Web Distribution\n\n- Asset: `%s`\n- SHA256: `%s.sha256`\n\n' "$web_dist_filename" "$web_dist_filename"
+          fi
+
           binary_rows=""
           for binary_asset in "${binary_assets[@]}"; do
             filename="$(basename "$binary_asset")"
@@ -452,16 +474,16 @@ jobs:
             binary_rows+="$row"
           done
 
-          web_dist_filename="web-dist-${release_version}.tgz"
+          binaries_section=""
+          if [ -n "$binary_rows" ]; then
+            printf -v binaries_section '## Binaries\n\n%s' "$binary_rows"
+          fi
 
-          export BINARY_ROWS="$binary_rows"
-          export CHART_DIGEST_NAME="${chart_filename}.sha256"
-          export CHART_DOWNLOAD_URL="${{ github.server_url }}/${{ github.repository }}/releases/download/${release_version}/${chart_filename}"
-          export CHART_FILENAME="$chart_filename"
           export PREVIOUS_VERSION="${{ needs.prepare.outputs.previous_display }}"
           export RELEASE_VERSION="$release_version"
-          export WEB_DIST_DIGEST_NAME="$web_dist_filename.sha256"
-          export WEB_DIST_FILENAME="$web_dist_filename"
+          export HELM_CHART_SECTION="$helm_chart_section"
+          export WEB_DIST_SECTION="$web_dist_section"
+          export BINARIES_SECTION="$binaries_section"
 
           node .github/replace-env.js .github/release-notes.md > "$notes_file"
           echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
