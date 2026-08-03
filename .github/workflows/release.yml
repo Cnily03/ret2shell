@@ -268,9 +268,9 @@ jobs:
           path: ${{ runner.temp }}/release-assets/*
           retention-days: 1
 
-  # Build platform-specific r2s-server binaries and upload direct executable assets for the final release job.
+  # Build target-specific r2s-server binaries and upload direct executable assets for the final release job.
   binary:
-    name: Build ${{ matrix.platform }}
+    name: Build ${{ matrix.target }}
     needs: prepare
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -278,24 +278,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-amd64
-            os: ubuntu-latest
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             binary_ext: ""
-          - platform: linux-arm64
-            os: ubuntu-24.04-arm
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             binary_ext: ""
-          - platform: macos-amd64
-            os: macos-15-intel
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             binary_ext: ""
-          - platform: macos-arm64
-            os: macos-latest
+          - os: macos-latest
             target: aarch64-apple-darwin
             binary_ext: ""
-          - platform: windows-amd64
-            os: windows-latest
+          - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_ext: .exe
     defaults:
@@ -370,7 +365,7 @@ jobs:
       - name: Package binary
         run: |
           asset_dir="${{ runner.temp }}/release-assets"
-          asset_name="r2s-server-${{ needs.prepare.outputs.release_version }}-${{ matrix.platform }}${{ matrix.binary_ext }}"
+          asset_name="r2s-server-${{ needs.prepare.outputs.release_version }}-${{ matrix.target }}${{ matrix.binary_ext }}"
           binary="target/${{ matrix.target }}/release/r2s-server${{ matrix.binary_ext }}"
 
           rm -rf "$asset_dir"
@@ -388,7 +383,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
-          name: release-binary-${{ matrix.platform }}
+          name: release-binary-${{ matrix.target }}
           path: ${{ runner.temp }}/release-assets/*
           retention-days: 1
 
